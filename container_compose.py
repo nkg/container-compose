@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import platform
 import re
@@ -394,6 +395,35 @@ def host_platform() -> str:
     return f"linux/{arch}"
 
 
+def parse_size(value: str | int) -> int:
+    """Compose byte sizes ("2gb", "3g", "512m", 1048576) -> bytes.
+
+    Compose accepts a bare integer as bytes and the suffixes b/k/m/g/t, with an
+    optional trailing "b" ("2gb" and "2g" are the same thing).
+    """
+    if isinstance(value, int):
+        return value
+    text = str(value).strip().lower()
+    if text.isdigit():
+        return int(text)
+    if not text:
+        # An empty value reaches here from `shm_size: ""`, or from a
+        # ${VAR}-interpolated size whose variable is unset. Without this the
+        # indexing below raises IndexError — the confusing crash this function
+        # exists to replace.
+        die(f"unrecognised size {value!r} (expected e.g. 2gb, 512m, or bytes)")
+    units = {"b": 1, "k": 1024, "m": 1024 ** 2, "g": 1024 ** 3, "t": 1024 ** 4}
+    body = text[:-1] if text.endswith("b") and len(text) > 1 and not text[-2].isdigit() else text
+    unit = body[-1]
+    if unit not in units:
+        die(f"unrecognised size {value!r} (expected e.g. 2gb, 512m, or bytes)")
+    try:
+        amount = float(body[:-1])
+    except ValueError:
+        die(f"unrecognised size {value!r} (expected e.g. 2gb, 512m, or bytes)")
+    return int(amount * units[unit])
+
+
 def container_name(service: str, svc: dict[str, Any]) -> str:
     return svc.get("container_name") or service
 
@@ -472,6 +502,38 @@ def build_run_argv(
     #
     # `ports:` in the compose file therefore applies to the Docker path only.
 
+    # shm_size -> a sized tmpfs at /dev/shm.
+    #
+    # This one is not cosmetic. Verified against container 0.12.1: the default
+    # /dev/shm is 64M, and neither `--tmpfs /dev/shm:size=2g` nor
+    # `--tmpfs /dev/shm,size=2g` honours the size (both leave it at 64M) —
+    # only the --mount form does. Headless Chromium and Firefox are precisely
+    # the workload that dies on an undersized /dev/shm, with a renderer crash
+    # that looks nothing like a runtime-translation problem, and
+    # fetcher-playwright/fetcher-camoufox both ask for 2gb.
+    shm = svc.get("shm_size")
+    if shm is not None:
+        argv += ["--mount",
+                 f"type=tmpfs,destination=/dev/shm,size={parse_size(shm)}"]
+
+    # deploy.resources.limits -> --cpus / --memory. `docker compose up` applies
+    # these outside swarm mode, so they are enforced under Docker today; left
+    # untranslated they would be silently absent here.
+    limits = (((svc.get("deploy") or {}).get("resources") or {}).get("limits") or {})
+    if limits.get("cpus") is not None:
+        # Compose allows fractional CPUs ("0.5"); container takes a whole
+        # number, so round up rather than down — a limit that silently became
+        # zero, or a fraction rejected at run time, is worse than a slightly
+        # generous one.
+        #
+        # Measured on container 0.12.1: the guest reports N+1 CPUs for
+        # `--cpus N` (1->2, 2->3, 4->5), consistently. The limit is applied;
+        # the VM just carries one more than it was asked for. Noted so the
+        # next person to run `nproc` in a container does not chase it.
+        argv += ["--cpus", str(max(1, math.ceil(float(limits["cpus"]))))]
+    if limits.get("memory") is not None:
+        argv += ["--memory", str(parse_size(limits["memory"]))]
+
     entrypoint = svc.get("entrypoint")
     trailing: list[str] = []
     if entrypoint:
@@ -484,7 +546,13 @@ def build_run_argv(
 
     command = svc.get("command")
     if command:
-        trailing += [command] if isinstance(command, str) else list(command)
+        # Compose word-splits a string-form `command:` — it does not wrap it in
+        # a shell and does not pass it as one literal argument. Passing it
+        # whole gave cloudflared a single argv element
+        # "tunnel --no-autoupdate run" instead of three, which it cannot parse
+        # as a subcommand plus flags, so `make up-tunnel` started a broken
+        # container. shlex, not str.split, so a quoted argument survives.
+        trailing += shlex.split(command) if isinstance(command, str) else list(command)
     argv += trailing
     return argv
 
