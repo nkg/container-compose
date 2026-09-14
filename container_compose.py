@@ -381,6 +381,45 @@ def check_runtime_support(services: dict[str, dict[str, Any]]) -> None:
 # ── Naming ───────────────────────────────────────────────────────
 
 
+# Matches the failure `container` reports when the requested platform is not in
+# the image's manifest list. Observed verbatim on container 0.12.1:
+#
+#   Error: unsupported platform Platform(osVersion: nil, osFeatures: nil,
+#          variant: Optional("v8"), _rawOS: "linux", _rawArch: "arm64")
+#
+# Deliberately narrow. Every other failure — a registry timeout, a rate limit,
+# an auth hiccup, an unknown tag — must NOT be treated as "this platform is
+# unavailable", because the remedy for that (pulling with no --platform) fetches
+# every entry in the manifest list. On a multi-arch image that turns a transient
+# blip into the multi-gigabyte download --platform exists to prevent.
+_UNSUPPORTED_PLATFORM = re.compile(r"unsupported platform", re.IGNORECASE)
+
+
+def pull_image(argv: list[str]) -> tuple[int, str]:
+    """Run a pull, streaming its output through while capturing it.
+
+    `container` writes BOTH progress and errors to stderr, so plain
+    capture_output would leave a multi-minute pull looking hung. This tees:
+    bytes go to our stderr as they arrive, and are accumulated so the caller can
+    tell a platform failure from every other kind.
+    """
+    proc = subprocess.Popen(argv, stderr=subprocess.PIPE)
+    captured = bytearray()
+    if proc.stderr is not None:
+        while True:
+            # read1, not readline: the progress display overwrites itself with
+            # carriage returns, so line-buffering would hold it back until the
+            # pull finished.
+            chunk = proc.stderr.read1(4096)
+            if not chunk:
+                break
+            sys.stderr.buffer.write(chunk)
+            sys.stderr.buffer.flush()
+            captured += chunk
+    proc.wait()
+    return proc.returncode, captured.decode("utf-8", "replace")
+
+
 def host_platform() -> str:
     """The platform `docker compose pull` would fetch: the host's own.
 
@@ -501,6 +540,22 @@ def build_run_argv(
     # DNS domain (note 6/7) instead of through 127.0.0.1.
     #
     # `ports:` in the compose file therefore applies to the Docker path only.
+
+    # A declared platform must reach `container run`, not just `pull`.
+    #
+    # Verified on container 0.12.1: running an amd64-only image on arm64 fails
+    # with the same "unsupported platform" error whether or not it is already
+    # pulled — a cached image is NOT enough, `container run` still resolves the
+    # platform itself and reports `Error: platform linux/arm64`. Since `make up`
+    # does not call `pull` first, every one of the nine amd64-only services
+    # failed at `up` without this.
+    #
+    # Only passed when DECLARED. Forcing the host's platform on an undeclared
+    # service would break multi-arch images that work today by letting
+    # `container` choose, and `start()` has no retry to fall back on.
+    declared_platform = svc.get("platform")
+    if declared_platform:
+        argv += ["--platform", str(declared_platform)]
 
     # shm_size -> a sized tmpfs at /dev/shm.
     #
@@ -885,7 +940,23 @@ class Engine:
             self.project, service, svc, self.network, self.dns_domain
         )
         print(f"  starting {name}")
-        self._run(argv, quiet=True)
+        rc = self._run(argv, check=False, quiet=True)
+        if rc != 0:
+            # An undeclared amd64-only image dies here with `container`'s own
+            # terse "unsupported platform" line and no indication of the fix.
+            # There is no retry to fall back on at this point — the wave
+            # ordering has already run — so name the remedy instead.
+            hint = ""
+            if not svc.get("platform"):
+                hint = (
+                    f"\n  If {svc.get('image', service)} does not publish "
+                    f"{host_platform()}, declare the one it does:\n"
+                    f"      {service}:\n"
+                    f"        platform: linux/amd64\n"
+                    f"  in docker-compose.yml. `container run` resolves the "
+                    f"platform itself, so pulling first does not help."
+                )
+            die(f"failed to start {name} ({rc}){hint}")
 
     def down(self, remove_volumes: bool = False) -> None:
         """Tear down the whole project, not just the profile selection.
@@ -1090,9 +1161,21 @@ class Engine:
             print(f"  pulling {image} ({plat})")
             if self.dry_run:
                 continue
-            rc = subprocess.run(
-                ["container", "image", "pull", "--platform", plat, image],
-                check=False).returncode
+            rc, err = pull_image(
+                ["container", "image", "pull", "--platform", plat, image])
+            if rc != 0 and _UNSUPPORTED_PLATFORM.search(err):
+                # The image does not publish this platform. Most of this
+                # stack's own images are amd64-only, so on an arm64 Mac the
+                # fast path fails for nine of eleven plugins.
+                #
+                # Retry letting `container` choose: it picks the only real
+                # entry in a single-arch index, which is what
+                # `docker compose pull` would have done. Any OTHER failure
+                # falls through to the aggregate below instead — retrying it
+                # broad would pull every platform in a multi-arch manifest to
+                # work around what may have been a momentary network blip.
+                print(f"    {plat} not published; retrying with the image's own")
+                rc, _err = pull_image(["container", "image", "pull", image])
             if rc != 0:
                 failures.append((service, image))
 
