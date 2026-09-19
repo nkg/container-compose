@@ -301,7 +301,13 @@ def load_model(apply_profiles: bool = True) -> tuple[str, dict[str, dict[str, An
         die(f"compose file not found: {COMPOSE_FILE}")
 
     env = build_env()
-    raw = yaml.safe_load(COMPOSE_FILE.read_text()) or {}
+    try:
+        raw = yaml.safe_load(COMPOSE_FILE.read_text()) or {}
+    except yaml.YAMLError as exc:
+        # A malformed compose file is an ordinary user error — the pre-commit
+        # hook exists to catch exactly this — so report it rather than dumping
+        # a traceback that buries the line number in noise.
+        die(f"{COMPOSE_FILE.name} is not valid YAML:\n  {exc}")
     doc = interpolate_tree(raw, env, COMPOSE_FILE.name)
 
     project = doc.get("name") or COMPOSE_FILE.parent.name
@@ -1523,6 +1529,16 @@ def parse_cli(argv: list[str]) -> argparse.Namespace:
     health = sub.add_parser("health", help="probe one container's declared healthcheck")
     health.add_argument("name")
     sub.add_parser("plan", help="print what `up` would do, without a runtime")
+    # `docker compose config --quiet` parity, for the pre-commit hook. Loads
+    # and validates the model and prints nothing on success; load_model() dies
+    # with a message on anything malformed. Needs no runtime, which is the
+    # point — the hook has to work on a machine with no container CLI at all.
+    config = sub.add_parser("config", help="validate the compose file and print nothing")
+    # Accepted and ignored, for `docker compose config --quiet` parity: the
+    # pre-commit hook passes it, and one call site has to serve both runtimes.
+    # This subcommand is always quiet on success.
+    config.add_argument("-q", "--quiet", action="store_true",
+                        help="accepted for docker compose parity; output is silent regardless")
 
 
     # --profile is pulled out by hand rather than declared on the parser
@@ -1581,7 +1597,7 @@ def main() -> None:
 
     args = parse_cli(list(sys.argv[1:]))
 
-    engine = Engine(dry_run=args.command == "plan")
+    engine = Engine(dry_run=args.command in ("plan", "config"))
     if args.command == "up":
         engine.up()
     elif args.command == "down":
@@ -1607,6 +1623,9 @@ def main() -> None:
         engine.health(args.name)
     elif args.command == "plan":
         engine.plan()
+    elif args.command == "config":
+        # Engine construction already parsed and validated the whole file.
+        pass
 
 
 if __name__ == "__main__":
