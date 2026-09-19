@@ -754,12 +754,57 @@ class Engine:
         """
         if self.dry_run:
             return os.environ.get(DNS_DOMAIN_ENV)
+
+        # Three sources, because the CLI changed shape under us and the first
+        # one silently stopped answering.
+        #
+        # container 0.12.x printed an aligned table:
+        #     dns.domain   String   sproncy   If defined, ...
+        # 1.4.x prints TOML, and — measured on 1.4.1 — emits an EMPTY `[dns]`
+        # section even when the domain IS set. So the original parse returned
+        # None on a correctly configured host, and `require_dns()` then refused
+        # to start the stack. A missing domain and an unreadable one look
+        # identical from one source, which is why there are three.
+        for value in (
+            self._dns_from_property_table(),
+            self._dns_from_dns_list(),
+            self._dns_from_user_defaults(),
+        ):
+            if value:
+                return value
+        return None
+
+    def _dns_from_property_table(self) -> str | None:
+        """container 0.12.x: an aligned table of properties."""
         out = self._capture(["container", "system", "property", "list"])
         for line in out.splitlines():
             if line.startswith("dns.domain"):
-                value = line.split()[2] if len(line.split()) > 2 else ""
+                parts = line.split()
+                value = parts[2] if len(parts) > 2 else ""
                 return None if value == "*undefined*" else value
         return None
+
+    def _dns_from_dns_list(self) -> str | None:
+        """container 1.x: `system dns list` prints the registered domains.
+
+        Only trusted when there is exactly one. With several registered there
+        is no way to tell from here which one `dns.domain` actually names, and
+        guessing would attach containers to a domain nothing resolves.
+        """
+        out = self._capture(["container", "system", "dns", "list"])
+        rows = [ln.strip() for ln in out.splitlines()[1:] if ln.strip()]
+        return rows[0] if len(rows) == 1 else None
+
+    def _dns_from_user_defaults(self) -> str | None:
+        """The value itself, from where the CLI persists it.
+
+        Last resort: it reads the same key `container system property list`
+        claims to show, so it stays correct while that output is broken.
+        """
+        out = self._capture(
+            ["defaults", "read", "com.apple.container.defaults", "dns.domain"]
+        ).strip()
+        return out or None
 
     def _capture(self, argv: list[str]) -> str:
         try:
@@ -799,7 +844,21 @@ class Engine:
             return "missing"
         if not data:
             return "missing"
-        return data[0].get("status", "missing")
+
+        # `status` changed shape between CLI generations. 0.12.x returned a
+        # plain string ("running"); 1.4.x returns an object:
+        #
+        #     "status": {"state": "running", "networks": [...], ...}
+        #
+        # Returning that object made every `state(...) == "running"` comparison
+        # false while the container was demonstrably running — so `up` recreated
+        # live containers and `make health` reported every embedded service as
+        # external. A silently wrong answer, which is the failure mode this file
+        # keeps having to defend against.
+        status = data[0].get("status", "missing")
+        if isinstance(status, dict):
+            status = status.get("state", "missing")
+        return status if isinstance(status, str) else "missing"
 
     def selected_names(self) -> dict[str, str]:
         """Service -> container name, for the PROFILE-SELECTED services only.
@@ -1091,8 +1150,19 @@ class Engine:
             if out.strip():
                 try:
                     data = json.loads(out)[0]
-                    status = data.get("status", "unknown")
-                    nets = data.get("networks") or []
+                    # Same shape change `state()` documents: 0.12.x had a
+                    # string status and top-level `networks`; 1.4.x nests both
+                    # under a status object. Reading the old shape here made
+                    # `ps --status running --services` print NOTHING on a
+                    # running stack, which is what `make health`, `make psql`
+                    # and `make clickhouse-shell` all grep.
+                    raw_status = data.get("status", "unknown")
+                    if isinstance(raw_status, dict):
+                        status = raw_status.get("state", "unknown")
+                        nets = raw_status.get("networks") or []
+                    else:
+                        status = raw_status
+                        nets = data.get("networks") or []
                     # `container inspect` reports ipv4Address (with a /prefix),
                     # not Docker's `address`. Only populated while running.
                     addr = (nets[0].get("ipv4Address") if nets else None) or "-"
