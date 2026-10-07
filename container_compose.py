@@ -2,21 +2,23 @@
 """A minimal Compose implementation for Apple `container`.
 
 Apple ships no compose support -- `container compose` errors out, and the
-community plugins do not implement healthcheck-gated `depends_on`, which this
-stack needs throughout: every plugin waits on valkey answering `valkey-cli
-ping`, scraper-control and store-postgres wait on `pg_isready`, and
-store-clickhouse waits on `SELECT 1`. Starting them early means they connect
-to nothing and dead-letter their first messages. So we read docker-compose.yml
-ourselves and drive the `container` CLI, keeping the compose file the single
-source of truth for both runtimes.
+community plugins do not implement healthcheck-gated `depends_on`, which a
+stack of services that connect to each other at startup needs: a service
+started before the one it depends on is healthy connects to nothing. So this
+reads docker-compose.yml itself and drives the `container` CLI, keeping the
+compose file the single source of truth for both runtimes.
 
-Only the subset of Compose that docker-compose.yml actually uses is implemented. Where
-`container` cannot express something, the compose file carries an
-`x-container:` block that is merged over the service (Compose ignores `x-*`
-extension fields, so `docker compose config` stays valid).
+Only the subset of Compose that real stacks have needed so far is
+implemented. Where `container` cannot express something, the compose file
+carries an `x-container:` block that is merged over the service (Compose
+ignores `x-*` extension fields, so `docker compose config` stays valid).
 
-Behaviours verified empirically against container 0.12.1 on macOS 15 (see
-RUNTIME NOTES below); each one is the reason for a specific decision here.
+Behaviours verified empirically against container 0.12.1 and 1.4.1 on macOS
+(see RUNTIME NOTES below); each one is the reason for a specific decision here.
+
+Originally extracted from HordiaLabs/scraper-deploy, whose docker-compose.yml
+is still the reference stack it is exercised against; the examples in the
+notes name that stack's services.
 """
 
 from __future__ import annotations
@@ -38,9 +40,10 @@ from typing import Any
 
 # ── RUNTIME NOTES (container 0.12.1, macOS 26.6) ─────────────────
 #
-# Verified against THIS repo's docker-compose.yml. (An earlier revision carried
-# these notes over verbatim from the repo this was adapted from, and they
-# referenced services — garage-init, ferretdb — that do not exist here.)
+# Verified against scraper-deploy's docker-compose.yml, the reference stack.
+# (An earlier revision carried these notes over verbatim from the repo this
+# was adapted from, and they referenced services — garage-init, ferretdb —
+# that did not exist there. Every note below names a service that does.)
 #
 # 1. Named volumes work: `-v <name>:/path` after `container volume create`.
 # 2. Single-file bind mounts work; monitoring/clickhouse-prometheus.xml mounts
@@ -84,15 +87,37 @@ from typing import Any
 #    ClickHouse's data volume is unaffected — it does not inspect its mount
 #    for pre-existing contents the way the postgres entrypoint does.
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-# Overridable for parity with runtime.sh's RT_COMPOSE_FILE, so both runtimes
-# can be pointed at another stack by the same environment variable.
-COMPOSE_FILE = Path(os.environ.get("RT_COMPOSE_FILE") or (REPO_ROOT / "docker-compose.yml"))
+# The file names `docker compose` itself looks for, in its order of preference.
+COMPOSE_FILE_CANDIDATES = ("compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml")
+
+
+def default_compose_file() -> Path:
+    """Resolve the compose file the way `docker compose` does.
+
+    `-f` (handled in parse_cli) wins. Otherwise $RT_COMPOSE_FILE -- the
+    variable scraper-deploy's runtime.sh uses so both runtimes can be pointed
+    at another stack by one name -- then Compose's own $COMPOSE_FILE, then the
+    first of Compose's default file names in the current directory. When none
+    exists, docker-compose.yml is reported as the missing file.
+    """
+    for var in ("RT_COMPOSE_FILE", "COMPOSE_FILE"):
+        if os.environ.get(var):
+            return Path(os.environ[var])
+    cwd = Path.cwd()
+    for name in COMPOSE_FILE_CANDIDATES:
+        if (cwd / name).is_file():
+            return cwd / name
+    return cwd / "docker-compose.yml"
+
+
+COMPOSE_FILE = default_compose_file()
 
 # Set by `container system property set dns.domain <domain>`. Containers are
 # started with --dns-domain so both peers and the host can resolve them by
-# name; without it there is no name resolution at all (note 7).
-DNS_DOMAIN_ENV = "SCRAPER_DNS_DOMAIN"
+# name; without it there is no name resolution at all (note 7). The
+# environment variable short-circuits the lookup, for tests and for hosts
+# where several domains exist.
+DNS_DOMAIN_ENV = "CONTAINER_COMPOSE_DNS_DOMAIN"
 
 # Active --profile flags, populated from argv before the model is loaded.
 # Module-level because load_model() is reached through several call paths and
@@ -241,10 +266,10 @@ def build_env() -> dict[str, str]:
     Read from the COMPOSE FILE's own directory, not this checkout's. That is
     what `docker compose -f <path>` does — the project directory is the compose
     file's directory — and COMPOSE_FILE is overridable via RT_COMPOSE_FILE
-    precisely so the tools can be pointed at another stack. Reading from
-    REPO_ROOT instead made the two runtimes disagree silently: Docker would
-    take the target stack's POSTGRES_PASSWORD while this translator took this
-    repo's, with no error either way. `resolve_bind_source()` already resolves
+    precisely so the tools can be pointed at another stack. Reading from the
+    checkout the script lived in instead made the two runtimes disagree
+    silently: Docker would take the target stack's POSTGRES_PASSWORD while this
+    translator took the checkout's, with no error either way. `resolve_bind_source()` already resolves
     relative to the compose file, so this was the odd one out.
 
     `.env.defaults` is also read if present, purely for parity with the repo
@@ -293,9 +318,10 @@ def load_model(apply_profiles: bool = True) -> tuple[str, dict[str, dict[str, An
         import yaml
     except ModuleNotFoundError:
         die(
-            "PyYAML is required to read docker-compose.yml.\n"
-            "  In this repo:   mise run setup\n"
-            "  Or directly:    uv pip install pyyaml   (or python3 -m pip install --user pyyaml)"
+            "PyYAML is required to read the compose file.\n"
+            "  It is a declared dependency, so this means the module was run from a\n"
+            "  checkout rather than installed. Either `pip install .` (or `uv tool\n"
+            "  install .`) in this repo, or `python3 -m pip install pyyaml`."
         )
     if not COMPOSE_FILE.is_file():
         die(f"compose file not found: {COMPOSE_FILE}")
@@ -360,11 +386,12 @@ def check_runtime_support(services: dict[str, dict[str, Any]]) -> None:
     """Refuse services Apple `container` cannot run, rather than failing
     obscurely mid-`up`.
 
-    Two monitoring services bind-mount the host Docker socket (cadvisor also
-    wants --privileged). There is no Apple-container equivalent: the socket is
-    Docker's own API, and cAdvisor reads it to enumerate Docker containers. So
-    this is a property of those images, not a gap in this translator, and no
-    amount of work here would make them useful under a different runtime.
+    The typical case is monitoring: cadvisor and promtail bind-mount the host
+    Docker socket (cadvisor also wants --privileged). There is no
+    Apple-container equivalent: the socket is Docker's own API, and cAdvisor
+    reads it to enumerate Docker containers. So this is a property of those
+    images, not a gap in this translator, and no amount of work here would
+    make them useful under a different runtime.
     """
     blocked = []
     for name, svc in services.items():
@@ -379,8 +406,8 @@ def check_runtime_support(services: dict[str, dict[str, Any]]) -> None:
             "these services cannot run under Apple `container`:\n"
             f"{lines}\n"
             "  They read Docker's own API, so there is no equivalent here.\n"
-            "  Run the monitoring profile under Docker:\n"
-            "      SCRAPER_RUNTIME=docker make up-monitoring"
+            "  Run them under Docker, or keep them behind a compose profile that\n"
+            "  is not selected on this runtime."
         )
 
 
@@ -1470,7 +1497,7 @@ def parse_cli(argv: list[str]) -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(
         prog="container-compose",
-        description="Run docker-compose.yml under Apple `container`.",
+        description="Run a docker-compose.yml under Apple `container`.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("up", help="create network, volumes, and start services in order")
@@ -1553,13 +1580,35 @@ def parse_cli(argv: list[str]) -> argparse.Namespace:
     # the flag silently eaten here and recorded as a compose profile, so the
     # command reaching the container was missing an argument. Profiles are
     # meaningless to exec anyway; it resolves against every service in the file.
+    # -f/--file is pulled out the same way, for the same reason: `docker
+    # compose -f <file> up` puts it before the subcommand. It has to be known
+    # before the model loads, so it is applied to the module-level COMPOSE_FILE
+    # here rather than returned.
+    #
+    # Unlike --profile it is ONLY recognised before the subcommand. Two
+    # subcommands have their own -f (`logs -f` is --follow, `rm -f` is
+    # --force), and the first version of this scan swallowed both as a compose
+    # file path. `docker compose` has the same split: a global -f before the
+    # verb, the verb's own -f after it.
+    global COMPOSE_FILE
     cleaned: list[str] = []
+    seen_command = False
     i = 0
     while i < len(argv):
         a = argv[i]
         if a == "exec":
             cleaned.extend(argv[i:])
             break
+        if not seen_command and a in ("-f", "--file"):
+            if i + 1 >= len(argv):
+                die(f"{a} requires a value")
+            COMPOSE_FILE = Path(argv[i + 1])
+            i += 2
+            continue
+        if not seen_command and a.startswith("--file="):
+            COMPOSE_FILE = Path(a.split("=", 1)[1])
+            i += 1
+            continue
         if a == "--profile":
             if i + 1 >= len(argv):
                 die("--profile requires a value")
@@ -1570,6 +1619,8 @@ def parse_cli(argv: list[str]) -> argparse.Namespace:
             PROFILE_ARGS.append(a.split("=", 1)[1])
             i += 1
             continue
+        if not a.startswith("-"):
+            seen_command = True
         cleaned.append(a)
         i += 1
 

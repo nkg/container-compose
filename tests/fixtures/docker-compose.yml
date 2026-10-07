@@ -1,0 +1,68 @@
+# Fixture stack for tests/test_cli.sh. Small, but it carries every Compose
+# feature the translator has needed in anger: profiles, healthcheck-gated
+# depends_on with `required: false`, nested interpolation with defaults, the
+# list form of `environment` with a bare VAR, an `x-container:` override,
+# shm_size, a declared platform, and a service that cannot run under Apple
+# `container` at all (the Docker socket).
+name: fixture
+
+services:
+  bus:
+    image: valkey/valkey:9
+    profiles: [embedded-bus]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+    volumes:
+      - bus_data:/data
+
+  db:
+    image: postgres:18
+    profiles: [embedded-db]
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    x-container:
+      environment:
+        PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+
+  app:
+    image: ghcr.io/example/app:latest
+    platform: linux/amd64
+    depends_on:
+      bus:
+        condition: service_healthy
+        required: false
+      db:
+        condition: service_healthy
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://app:${POSTGRES_PASSWORD}@db:5432/app}
+      BUS_URL: ${BUS_URL:-redis://bus:6379}
+      PROXY_URL: ${PROXY_URL-http://router:8888}
+    ports:
+      - "127.0.0.1:4000:4000"
+
+  browser:
+    image: ghcr.io/example/browser:latest
+    shm_size: 2gb
+    environment:
+      - MODE=headless
+      - HOST_PASSTHROUGH
+    depends_on:
+      app:
+        condition: service_started
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    profiles: [monitoring]
+    privileged: true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+volumes:
+  bus_data:
+  db_data:

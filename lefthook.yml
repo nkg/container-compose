@@ -1,0 +1,9 @@
+pre-commit:
+  parallel: true
+  commands:
+    shellcheck:
+      glob: "tests/*.sh"
+      run: shellcheck --severity=warning {staged_files}
+    py-parse:
+      glob: "*.py"
+      run: python3 -c "import ast,sys; [ast.parse(open(f).read()) for f in sys.argv[1:]]" {staged_files}

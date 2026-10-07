@@ -1,0 +1,16 @@
+# mise — pin local tool versions for container-compose
+[tools]
+python   = "3.14.3"
+uv       = "0.11.3"
+lefthook = "2.1.4"
+
+[env]
+_.python.venv = { path = ".venv", create = true }
+
+[tasks.setup]
+description = "Install the tool editable into .venv so `container-compose` is on PATH"
+run = "uv pip install -e ."
+
+[tasks.test]
+description = "Run the test suite"
+run = "bash tests/test_cli.sh"

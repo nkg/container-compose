@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# SECURITY: runs on the org self-hosted pool on `pull_request`. Safe while
+# the repo is private (only collaborators can open PRs). If it goes public,
+# gate these triggers or move to GitHub-hosted runners first.
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || 'shared' }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Run shellcheck
+        run: shellcheck --severity=warning tests/*.sh
+
+      # Installed the way consumers install it, so the console script and the
+      # pyyaml dependency are exercised rather than the bare module.
+      - name: Install
+        run: python3 -m pip install --quiet --break-system-packages .
+
+      - name: Run tests
+        run: bash tests/test_cli.sh
