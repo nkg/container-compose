@@ -1,14 +1,20 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "container-compose"
-version = "0.1.0"
+version = "0.1.1"
 description = "A minimal Compose implementation for Apple `container`: reads docker-compose.yml and drives the container CLI."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = ["pyyaml>=6"]
+
+[project.urls]
+Homepage = "https://github.com/nkg/container-compose"
+Issues = "https://github.com/nkg/container-compose/issues"
 
 [project.scripts]
 container-compose = "container_compose:main"

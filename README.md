@@ -12,9 +12,9 @@ other at startup needs.
 ## Install
 
 ```bash
-uv tool install git+https://github.com/HordiaLabs/container-compose.git@v0.1.0
+uv tool install git+https://github.com/nkg/container-compose.git@v0.1.1
 # or
-pip install git+https://github.com/HordiaLabs/container-compose.git@v0.1.0
+pip install git+https://github.com/nkg/container-compose.git@v0.1.1
 ```
 
 PyYAML is the only dependency. Python 3.10 or newer.
@@ -75,7 +75,11 @@ mise install && mise run setup   # editable install into .venv
 mise run test                    # tests/test_cli.sh against tests/fixtures/
 ```
 
-Tests need no runtime. The reference stack this grew up against is
-[HordiaLabs/scraper-deploy](https://github.com/HordiaLabs/scraper-deploy),
-whose own `tests/test_runtime.sh` runs the installed tool against the real
-compose file and diffs its interpolation against `docker compose config`.
+Tests need no runtime. The tool grew up against a private 13-service
+deployment repo, whose own integration suite runs the installed tool against
+its real compose file and diffs the interpolation against `docker compose
+config`; that is where the measured behaviours above came from.
+
+## License
+
+[MIT](LICENSE).

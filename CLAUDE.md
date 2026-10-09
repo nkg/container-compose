@@ -11,7 +11,7 @@ script is `container-compose`. PyYAML is the only dependency.
 - Tests: `bash tests/test_cli.sh` (or `mise run test`). They run with no
   runtime, through `plan`/`config` and by importing the module. The fixture is
   `tests/fixtures/docker-compose.yml`; extend it rather than adding a second.
-- The primary consumer is `HordiaLabs/scraper-deploy`, which pins a tag of this
+- The primary consumer is `HordiaLabs/scraper-deploy` (private), which pins a tag of this
   repo in its `mise.toml` and CI and runs its own integration tests against the
   installed tool. A behaviour change here needs a tag bump there.
 - Shell: `shellcheck --severity=warning tests/*.sh` must pass (CI runs it).
