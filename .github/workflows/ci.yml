@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+# Pinned to ubuntu-24.04 rather than ubuntu-latest: the label moves to
+# Ubuntu 26 on 2026-10-19 (actions/runner-images#14748), and a release
+# workflow should not change OS underneath a tag. Bump deliberately.
+#
 # GitHub-hosted runners, deliberately. This repo is public: a fork PR runs
 # whatever it likes inside the job, which is fine on a throwaway hosted VM
 # and not fine on a self-hosted machine. (Before the move to a personal
@@ -21,7 +25,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -33,7 +37,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ matrix.python }}
 
