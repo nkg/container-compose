@@ -1,0 +1,73 @@
+name: Release
+
+# Publishes to PyPI when a v* tag is pushed, via PyPI trusted publishing
+# (OIDC): no API token is stored anywhere. One-time setup on PyPI, under
+# the project's "Publishing" settings: owner `nkg`, repository
+# `container-compose`, workflow `release.yml`, environment `pypi`. Until
+# that is done the publish step fails with "invalid-publisher", which is
+# the expected state and harmless — the tag and the GitHub release still
+# exist.
+#
+# The tag must match pyproject.toml's version; the check below refuses to
+# build a v0.2.0 tag from a 0.1.1 pyproject rather than publish a release
+# whose name lies about its contents.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.14"
+
+      - name: Tag matches pyproject version
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          if [[ "$tag" != "$version" ]]; then
+            echo "tag v$tag but pyproject.toml says $version" >&2
+            exit 1
+          fi
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --quiet build
+          python -m build
+
+      - name: Smoke-test the wheel
+        run: |
+          python -m pip install --quiet dist/*.whl
+          container-compose --help >/dev/null
+          cd tests/fixtures && container-compose config --quiet
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v1.12.4
