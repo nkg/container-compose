@@ -17,9 +17,11 @@ was written. See [How it compares](#how-it-compares) before choosing.
 ## Install
 
 ```bash
-uv tool install git+https://github.com/nkg/container-compose.git@v0.1.1
+uv tool install container-compose
 # or
-pip install git+https://github.com/nkg/container-compose.git@v0.1.1
+pip install container-compose
+# or, straight from a tag
+uv tool install git+https://github.com/nkg/container-compose.git@v0.1.2
 ```
 
 PyYAML is the only dependency. Python 3.10 or newer.
