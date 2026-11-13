@@ -21,7 +21,7 @@ uv tool install container-compose
 # or
 pip install container-compose
 # or, straight from a tag
-uv tool install git+https://github.com/nkg/container-compose.git@v0.1.2
+uv tool install git+https://github.com/nkg/container-compose.git@v0.1.3
 ```
 
 PyYAML is the only dependency. Python 3.10 or newer.
