@@ -1196,11 +1196,21 @@ class Engine:
                     else:
                         status = raw_status
                         nets = data.get("networks") or []
+                    # Coerced as `state()` does. Anything but a string (null,
+                    # a number, a further-nested object) reached `len()` in the
+                    # width calculation below and raised TypeError, taking out
+                    # `make health`/`psql`/`clickhouse-shell` instead of just
+                    # showing one odd row.
+                    if not isinstance(status, str):
+                        status = "unknown"
                     # `container inspect` reports ipv4Address (with a /prefix),
                     # not Docker's `address`. Only populated while running.
-                    addr = (nets[0].get("ipv4Address") if nets else None) or "-"
-                    addr = addr.split("/")[0]
-                except (json.JSONDecodeError, IndexError, KeyError):
+                    first = nets[0] if isinstance(nets, list) and nets else None
+                    ip = first.get("ipv4Address") if isinstance(first, dict) else None
+                    addr = ip.split("/")[0] if isinstance(ip, str) and ip else "-"
+                except (json.JSONDecodeError, IndexError, KeyError, AttributeError, TypeError):
+                    # A malformed payload (e.g. a non-object first element)
+                    # degrades to whatever was read so far, never a traceback.
                     pass
             if status == "running" and self.dns_domain:
                 addr = f"{name}.{self.dns_domain} ({addr})"

@@ -157,6 +157,37 @@ PY
 then ok "environment list form: bare VAR inherits, unset is dropped, '=' in values survives"
 else no "environment list form"; fi
 
+# ── ps: odd `container inspect` output degrades instead of raising ────────
+
+if py <<'PY' >/dev/null 2>&1
+import importlib.util, io, json, sys, contextlib
+spec = importlib.util.spec_from_file_location("cc", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# One container per status shape ps() can't use: a null or numeric status, an
+# object whose state isn't a string, and networks that aren't a list of objects.
+inspect = {
+    "c-null": [{"status": None}],
+    "c-int": [{"status": 3}],
+    "c-obj": [{"status": {"state": None, "networks": "eth0"}}],
+    "c-nets": [{"status": "running", "networks": ["10.0.0.2"]}],
+    "c-ok": [{"status": {"state": "running", "networks": [{"ipv4Address": "10.0.0.9/24"}]}}],
+}
+e = m.Engine.__new__(m.Engine)
+e.dns_domain = None
+e.all_names = lambda: {k.removeprefix("c-"): k for k in inspect}
+e._capture = lambda argv: json.dumps(inspect[argv[-1]])
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    e.ps()
+    e.ps(status="running", services_only=True)
+out = buf.getvalue()
+assert "10.0.0.9" in out, out
+running = out.split("\n")[-3:-1]
+assert running == ["nets", "ok"], running
+PY
+then ok "ps: a non-string status or odd networks shows as unknown, not a TypeError"
+else no "ps raises on an odd container inspect status"; fi
+
 # ── CLI parsing ─────────────────────────────────────────────────────────────
 
 if py <<'PY' >/dev/null 2>&1
