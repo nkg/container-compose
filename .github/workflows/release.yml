@@ -1,12 +1,8 @@
 name: Release
 
-# Publishes to PyPI when a v* tag is pushed, via PyPI trusted publishing
-# (OIDC): no API token is stored anywhere. One-time setup on PyPI, under
-# the project's "Publishing" settings: owner `nkg`, repository
-# `container-compose`, workflow `release.yml`, environment `pypi`. Until
-# that is done the publish step fails with "invalid-publisher", which is
-# the expected state and harmless — the tag and the GitHub release still
-# exist.
+# Builds the sdist and wheel when a v* tag is pushed and attaches them to a
+# GitHub release for that tag. It does not publish to PyPI: installs come
+# from this repository (see the README).
 #
 # The tag must match pyproject.toml's version; the check below refuses to
 # build a v0.2.0 tag from a 0.1.1 pyproject rather than publish a release
@@ -58,16 +54,19 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-  publish:
+  release:
     needs: build
     runs-on: ubuntu-24.04
-    environment: pypi
     permissions:
-      id-token: write
+      contents: write
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dist
           path: dist/
 
-      - uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v1.12.4
+      - name: Create the GitHub release with the built files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes --verify-tag
