@@ -17,12 +17,13 @@ was written. See [How it compares](#how-it-compares) before choosing.
 ## Install
 
 ```bash
-uv tool install container-compose
-# or
-pip install container-compose
-# or, straight from a tag
 uv tool install git+https://github.com/nkg/container-compose.git@v0.1.3
+# or
+pip install git+https://github.com/nkg/container-compose.git@v0.1.3
 ```
+
+Each tag's GitHub release also has the wheel and sdist attached. The package
+is not on PyPI.
 
 PyYAML is the only dependency. Python 3.10 or newer.
 
