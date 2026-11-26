@@ -1,12 +1,22 @@
 name: Release
 
-# Builds the sdist and wheel when a v* tag is pushed and attaches them to a
-# GitHub release for that tag. It does not publish to PyPI: installs come
-# from this repository (see the README).
+# When a v* tag is pushed: build the sdist and wheel once, then hand the same
+# files to two independent jobs.
+#
+#   build ──┬── pypi     publishes to PyPI through trusted publishing (OIDC)
+#           └── release  creates the GitHub release with the files attached
+#
+# No API token is stored anywhere. The `pypi` job alone gets `id-token: write`
+# and runs in the `pypi` GitHub environment; PyPI accepts the upload only from
+# a trusted publisher registered once under the project's "Publishing"
+# settings: owner `nkg`, repository `container-compose`, workflow
+# `release.yml`, environment `pypi`. Without that registration the `pypi` job
+# fails with "invalid-publisher" and the GitHub release is still created.
 #
 # The tag must match pyproject.toml's version; the check below refuses to
 # build a v0.2.0 tag from a 0.1.1 pyproject rather than publish a release
-# whose name lies about its contents.
+# whose name lies about its contents. PyPI never accepts the same version
+# twice, so every release needs a version bump.
 
 on:
   push:
@@ -39,8 +49,11 @@ jobs:
 
       - name: Build sdist and wheel
         run: |
-          python -m pip install --quiet build
+          python -m pip install --quiet build twine
           python -m build
+
+      - name: Check the package metadata
+        run: python -m twine check --strict dist/*
 
       - name: Smoke-test the wheel
         run: |
@@ -54,8 +67,27 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  pypi:
+    needs: build
+    # Only for a real release tag on this repository, never from a fork.
+    if: github.repository == 'nkg/container-compose' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/project/container-compose/${{ github.ref_name }}
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+
   release:
     needs: build
+    if: github.repository == 'nkg/container-compose' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
     runs-on: ubuntu-24.04
     permissions:
       contents: write

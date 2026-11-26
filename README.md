@@ -16,14 +16,22 @@ was written. See [How it compares](#how-it-compares) before choosing.
 
 ## Install
 
+From [PyPI](https://pypi.org/project/container-compose/):
+
 ```bash
-uv tool install git+https://github.com/nkg/container-compose.git@v0.1.3
+uv tool install container-compose
 # or
-pip install git+https://github.com/nkg/container-compose.git@v0.1.3
+pip install container-compose
 ```
 
-Each tag's GitHub release also has the wheel and sdist attached. The package
-is not on PyPI.
+Or straight from a tag of this repository:
+
+```bash
+uv tool install git+https://github.com/nkg/container-compose.git@v0.1.3
+```
+
+Each tag's GitHub release also has the wheel and sdist attached; they are the
+same files that were uploaded to PyPI.
 
 PyYAML is the only dependency. Python 3.10 or newer.
 
@@ -112,6 +120,20 @@ Tests need no runtime. The tool grew up against a private 13-service
 deployment repo, whose own integration suite runs the installed tool against
 its real compose file and diffs the interpolation against `docker compose
 config`; that is where the measured behaviours above came from.
+
+## Releasing
+
+1. Bump `version` in `pyproject.toml` (PyPI never accepts a version twice) and
+   merge that to `main`.
+2. Tag the merge commit and push the tag: `git tag v0.1.4 && git push origin v0.1.4`.
+
+`.github/workflows/release.yml` checks the tag against `pyproject.toml`,
+builds the sdist and wheel once, then publishes those files to PyPI and
+attaches them to a GitHub release for the tag. PyPI publishing uses trusted
+publishing, so no token is stored; it needs a trusted publisher registered
+once on PyPI (project → Publishing: owner `nkg`, repository
+`container-compose`, workflow `release.yml`, environment `pypi`). The PyPI job
+waits for approval in the `pypi` GitHub environment.
 
 ## License
 
