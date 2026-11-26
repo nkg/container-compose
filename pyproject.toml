@@ -5,16 +5,35 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "container-compose"
 version = "0.1.3"
-description = "A minimal Compose implementation for Apple `container`: reads docker-compose.yml and drives the container CLI."
+description = "A minimal Compose implementation for Apple container"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = ["pyyaml>=6"]
+keywords = ["compose", "docker-compose", "apple-container", "macos", "containers"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: System :: Systems Administration",
+]
 
 [project.urls]
 Homepage = "https://github.com/nkg/container-compose"
+Repository = "https://github.com/nkg/container-compose"
 Issues = "https://github.com/nkg/container-compose/issues"
+Changelog = "https://github.com/nkg/container-compose/releases"
 
 [project.scripts]
 container-compose = "container_compose:main"
